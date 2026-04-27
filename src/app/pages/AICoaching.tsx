@@ -227,6 +227,26 @@ const scoreColor = (score: number) =>
 const scoreBg = (score: number) =>
   score >= 80 ? "bg-emerald-50 text-emerald-600" : score >= 65 ? "bg-amber-50 text-amber-600" : "bg-red-50 text-red-500";
 
+const motionScoreWeights = {
+  swing: 0.25,
+  contactPoint: 0.25,
+  recovery: 0.2,
+  footworkTiming: 0.2,
+  consistency: 0.1,
+} as const;
+
+const getMotionBand = (score: number) => {
+  if (score <= 20) return { label: "Action Not Formed", ntrp: "1.0-1.5", meaning: "Core stroke pattern is not stable yet." };
+  if (score <= 35) return { label: "Initial Foundation", ntrp: "2.0", meaning: "Basic mechanics appear but are not stable." };
+  if (score <= 50) return { label: "Developing Form", ntrp: "2.5", meaning: "Can produce short sequences with limited consistency." };
+  if (score <= 65) return { label: "Intermediate Recreational", ntrp: "3.0", meaning: "Simple rallies and basic directional control are present." };
+  if (score <= 75) return { label: "Strong Club Player", ntrp: "3.5", meaning: "Rallies are more stable with better movement quality." };
+  if (score <= 84) return { label: "Advanced Club Player", ntrp: "4.0", meaning: "Reliable mechanics with stronger control and recovery." };
+  if (score <= 91) return { label: "Competitive Advanced", ntrp: "4.5-5.0", meaning: "Advanced timing, pace, and tactical execution." };
+  if (score <= 96) return { label: "Elite", ntrp: "5.5-6.0", meaning: "Tournament-level repeatability and movement efficiency." };
+  return { label: "Professional", ntrp: "6.5-7.0", meaning: "Professional quality across multiple clear contacts." };
+};
+
 /* ─────────────────────────── Component ─────────────────────────── */
 export function AICoaching() {
   const [state, setState] = useState<AnalysisState>("idle");
@@ -361,11 +381,39 @@ export function AICoaching() {
 
   const displayResult = useMemo(() => {
     if (!analysisResult) return mockAnalysisResult;
+    const fallbackSubscores = {
+      swing: analysisResult.physicalMetrics.power,
+      contactPoint: Math.round(
+        (analysisResult.shotAnalysis.forehand.successRate +
+          analysisResult.shotAnalysis.backhand.successRate +
+          analysisResult.shotAnalysis.serve.successRate) /
+          3
+      ),
+      recovery: analysisResult.physicalMetrics.stability,
+      footworkTiming: analysisResult.physicalMetrics.agility,
+      consistency: Math.round(
+        (analysisResult.shotAnalysis.forehand.successRate +
+          analysisResult.shotAnalysis.backhand.successRate) /
+          2
+      ),
+    };
+    const subscores = analysisResult.motionAssessment?.subscores ?? fallbackSubscores;
+    const weightedFromSubscores = Math.round(
+      subscores.swing * motionScoreWeights.swing +
+        subscores.contactPoint * motionScoreWeights.contactPoint +
+        subscores.recovery * motionScoreWeights.recovery +
+        subscores.footworkTiming * motionScoreWeights.footworkTiming +
+        subscores.consistency * motionScoreWeights.consistency
+    );
+    const weightedScore = analysisResult.motionAssessment?.weightedScore ?? weightedFromSubscores;
+    const scoreBand = getMotionBand(weightedScore);
+
     return {
       ...mockAnalysisResult,
-      overallScore: analysisResult.summary.score,
-      scoreLabel: analysisResult.summary.level,
+      overallScore: weightedScore,
+      scoreLabel: analysisResult.summary.level || scoreBand.label,
       sessionDate: "Just now",
+      estimatedLevel: analysisResult.motionAssessment?.ntrpLevel || `USTA ${scoreBand.ntrp}`,
       shotConsistency: Math.round(
         (analysisResult.shotAnalysis.forehand.successRate +
           analysisResult.shotAnalysis.backhand.successRate +
@@ -388,20 +436,23 @@ export function AICoaching() {
         quality: pt.result === "in" ? ("rally" as const) : ("short" as const),
       })),
       skillRadar: [
-        { skill: "Power", score: analysisResult.physicalMetrics.power, max: 100 },
-        {
-          skill: "Consistency",
-          score: Math.round(
-            (analysisResult.shotAnalysis.forehand.successRate +
-              analysisResult.shotAnalysis.backhand.successRate) /
-            2
-          ),
-          max: 100,
-        },
-        { skill: "Spin", score: analysisResult.physicalMetrics.speed, max: 100 }, // using speed for spin in demo
-        { skill: "Net Clearance", score: analysisResult.physicalMetrics.stability, max: 100 },
-        { skill: "Footwork", score: analysisResult.physicalMetrics.agility, max: 100 },
+        { skill: "Swing", score: subscores.swing, max: 100 },
+        { skill: "Contact", score: subscores.contactPoint, max: 100 },
+        { skill: "Recovery", score: subscores.recovery, max: 100 },
+        { skill: "Footwork", score: subscores.footworkTiming, max: 100 },
+        { skill: "Consistency", score: subscores.consistency, max: 100 },
       ],
+      motionAssessment: {
+        weights: analysisResult.motionAssessment?.weights ?? motionScoreWeights,
+        subscores,
+        weightedScore,
+        ntrpLevel: analysisResult.motionAssessment?.ntrpLevel || `USTA ${scoreBand.ntrp}`,
+        videoReadiness:
+          analysisResult.motionAssessment?.videoReadiness ||
+          "Medium confidence: score derived from available visible contacts.",
+        bandLabel: scoreBand.label,
+        bandMeaning: scoreBand.meaning,
+      },
       stats: analysisResult.stats,
       trainingPlan: analysisResult.trainingPlan,
     };
@@ -988,7 +1039,63 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 2. SHOT ANALYSIS ══════════ */}
+                  {/* ══════════ 2. SHORT-VIDEO MOTION SCORE ══════════ */}
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-2">
+                        <Video className="w-5 h-5 text-cyan-600" />
+                        <h3 className="text-gray-900" style={{ fontWeight: 700, fontSize: "0.95rem" }}>Short-Video Motion Score</h3>
+                      </div>
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${scoreBg(displayResult.motionAssessment?.weightedScore || displayResult.overallScore)}`}>
+                        {displayResult.motionAssessment?.bandLabel || displayResult.scoreLabel}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2.5">
+                        {[
+                          { key: "Swing Chain", score: displayResult.motionAssessment?.subscores.swing, weight: 25 },
+                          { key: "Contact Point", score: displayResult.motionAssessment?.subscores.contactPoint, weight: 25 },
+                          { key: "Recovery", score: displayResult.motionAssessment?.subscores.recovery, weight: 20 },
+                          { key: "Footwork & Timing", score: displayResult.motionAssessment?.subscores.footworkTiming, weight: 20 },
+                          { key: "Repeatability", score: displayResult.motionAssessment?.subscores.consistency, weight: 10 },
+                        ].map((item) => (
+                          <div key={item.key}>
+                            <div className="mb-1.5 flex items-center justify-between">
+                              <span className="text-gray-700" style={{ fontSize: "0.78rem", fontWeight: 600 }}>
+                                {item.key} <span className="text-gray-400 font-medium">({item.weight}%)</span>
+                              </span>
+                              <span className="text-teal-700" style={{ fontSize: "0.78rem", fontWeight: 700 }}>{item.score || 0}</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                              <div
+                                className="h-full bg-gradient-to-r from-teal-400 to-cyan-500 rounded-full"
+                                style={{ width: `${item.score || 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4">
+                        <p className="text-gray-500" style={{ fontSize: "0.7rem", fontWeight: 700 }}>NTRP / USTA EQUIVALENT</p>
+                        <p className="text-gray-900 mt-1" style={{ fontSize: "1.25rem", fontWeight: 800 }}>
+                          {displayResult.motionAssessment?.ntrpLevel || displayResult.estimatedLevel}
+                        </p>
+                        <p className="text-gray-500 mt-2" style={{ fontSize: "0.75rem" }}>
+                          {displayResult.motionAssessment?.bandMeaning || "Movement profile generated from weighted action subscores."}
+                        </p>
+                        <div className="mt-3 p-2.5 rounded-xl bg-white border border-gray-100">
+                          <p className="text-gray-400" style={{ fontSize: "0.65rem", fontWeight: 700 }}>SHORT-VIDEO RELIABILITY</p>
+                          <p className="text-gray-700 mt-1" style={{ fontSize: "0.74rem", fontWeight: 600 }}>
+                            {displayResult.motionAssessment?.videoReadiness}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ══════════ 3. SHOT ANALYSIS ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <Target className="w-5 h-5 text-teal-600" />
@@ -1020,7 +1127,7 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 3. TECHNICAL INSIGHTS ══════════ */}
+                  {/* ══════════ 4. TECHNICAL INSIGHTS ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <Brain className="w-5 h-5 text-purple-600" />
@@ -1058,7 +1165,7 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 4. SHOT PLACEMENT ══════════ */}
+                  {/* ══════════ 5. SHOT PLACEMENT ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5 overflow-hidden">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
@@ -1098,7 +1205,7 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 5. SKILL PERFORMANCE ══════════ */}
+                  {/* ══════════ 6. SKILL PERFORMANCE ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <BarChart3 className="w-5 h-5 text-sky-600" />
@@ -1146,7 +1253,7 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 6. POST-MATCH STATS ══════════ */}
+                  {/* ══════════ 7. POST-MATCH STATS ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
                     <div className="flex items-center gap-2 mb-4">
                       <Activity className="w-5 h-5 text-indigo-600" />
@@ -1172,7 +1279,7 @@ export function AICoaching() {
                     </div>
                   </div>
 
-                  {/* ══════════ 7. TRAINING PLAN ══════════ */}
+                  {/* ══════════ 8. TRAINING PLAN ══════════ */}
                   <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-5">
                     <div className="flex items-center gap-2 mb-6">
                       <Calendar className="w-5 h-5 text-teal-600" />

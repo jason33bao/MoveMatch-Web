@@ -275,6 +275,7 @@ export function AICoaching() {
   const [aiMsgIndex, setAiMsgIndex] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const latestAnalysisRunRef = useRef(0);
 
   /* Rotate AI messages while analysing */
   useEffect(() => {
@@ -325,6 +326,7 @@ export function AICoaching() {
   };
 
   const runRealAnalysis = async (file: File) => {
+    const runId = ++latestAnalysisRunRef.current;
     setErrorMessage(null);
     setState("uploading");
     setProgress(0);
@@ -340,21 +342,31 @@ export function AICoaching() {
       });
     }, 100);
 
+    let analyzeStateTimeout: number | undefined;
     try {
       // In a few seconds, switch to analyzing state to show AI rotation
-      setTimeout(() => {
+      analyzeStateTimeout = window.setTimeout(() => {
+        if (runId !== latestAnalysisRunRef.current) return;
         clearInterval(interval);
         setProgress(100);
         setState("analyzing");
       }, 1500);
 
       const result = await analyzeVideo(file);
+      if (runId !== latestAnalysisRunRef.current) return;
       setAnalysisResult(result);
+      setErrorMessage(null);
       setState("done");
     } catch (err) {
+      if (runId !== latestAnalysisRunRef.current) return;
       console.error(err);
       setErrorMessage(err instanceof Error ? err.message : "Analysis failed. Please try again.");
       setState("idle");
+    } finally {
+      clearInterval(interval);
+      if (analyzeStateTimeout !== undefined) {
+        window.clearTimeout(analyzeStateTimeout);
+      }
     }
   };
 
@@ -369,6 +381,7 @@ export function AICoaching() {
   };
 
   const reset = () => {
+    latestAnalysisRunRef.current += 1;
     setState("idle");
     setUploadedFile(null);
     setProgress(0);
